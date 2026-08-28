@@ -301,11 +301,20 @@ configuration for this exact board (`mcx_n9xx_evk/mcxn947/cpu0` +
 `mcx_n9xx_evk/mcxn947/cpu1`) - adapted into this app's structure/style
 instead of copied as a standalone sample.
 
-How it boots: `boards/mcx_n9xx_evk_mcxn947_cpu0.conf` sets
-`CONFIG_SECOND_CORE_MCUX=y`, which makes cpu0's SoC init code
-(`soc/nxp/mcx/mcxn/soc.c`) point cpu1's boot address at
-`slot1_partition` and release it out of reset during cpu0's own boot -
-no separate flashing step or button press needed to start cpu1.
+How it boots: `sysbuild.cmake` sets `CONFIG_SECOND_CORE_MCUX=y` on the
+cpu0 image (via `set_config_bool()`, so it takes effect only for the
+`--sysbuild` build - see the note below). That makes cpu0's SoC init
+code (`soc/nxp/mcx/mcxn/soc.c`, `second_core_boot()`) point cpu1's
+reset vector (`SYSCON->CPBOOT`) at `slot1_partition` and release cpu1
+out of reset during cpu0's own boot - no separate flashing step or
+button press needed to start cpu1. The cpu1 image is linked to match:
+`remote/prj.conf` sets `CONFIG_USE_DT_CODE_PARTITION=y` and the board's
+`mcx_n9xx_evk_mcxn947_cpu1.dts` chooses `slot1_partition`, so it links
+at `0x1010a000` (`CONFIG_FLASH_LOAD_OFFSET=0x10a000`) rather than the
+flash base `0x10000000` where cpu0 lives. `west flash` walks both
+sysbuild domains (`flash_order: [mcx-n9xx-evk, remote]` in
+`domains.yaml`) and writes cpu0's image to `0x10000000` and cpu1's to
+`0x1010a000` in one invocation.
 
 Communication is over the MU (Messaging Unit) hardware mailbox via
 mainline Zephyr's generic `mbox` API: `src/plat_mbox.c` (cpu0) sends a
@@ -338,14 +347,15 @@ west build -p always -b mcx_n9xx_evk/mcxn947/cpu0 --sysbuild meta-facebook/mcx-n
 west flash   # flashes both cpu0 and cpu1 images
 ```
 
-**Note:** `boards/mcx_n9xx_evk_mcxn947_cpu0.conf` (which releases cpu1)
-applies to *every* build of this app, not just `--sysbuild` ones -
-matching upstream's own sample. A plain single-core rebuild will still
-release cpu1, which then runs whatever was last flashed to
-`slot1_partition` (garbage/erased flash if nothing ever was). This is
-harmless - cpu1 has its own isolated core/RAM - but don't be surprised
-if cpu1's LED-adjacent behavior (there isn't any yet) seems to have "a
-mind of its own" after mixing sysbuild and non-sysbuild builds.
+**Note:** releasing cpu1 (`CONFIG_SECOND_CORE_MCUX=y`) is scoped to the
+`--sysbuild` build only - it is set from `sysbuild.cmake`, not from
+`boards/mcx_n9xx_evk_mcxn947_cpu0.conf`. An earlier version set it in
+that board `.conf`, so it applied to the plain single-core build too:
+cpu0 released cpu1 into an empty `slot1_partition`, cpu1 wild-branched
+through blank flash and wedged the whole chip before cpu0's console
+came up (board apparently hung, VCOM dead or garbled). Keeping it in
+`sysbuild.cmake` means a single-core `west build` (no `--sysbuild`)
+never starts cpu1. Don't move it back.
 
 ### Persistent storage (fourth real subsystem, verified on hardware)
 
