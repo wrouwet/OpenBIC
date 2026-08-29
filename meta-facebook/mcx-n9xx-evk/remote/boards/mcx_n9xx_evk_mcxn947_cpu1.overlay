@@ -1,12 +1,49 @@
 /*
- * Mirror image of ../../boards/mcx_n9xx_evk_mcxn947_cpu0.overlay's
- * mbox-consumer node, with tx/rx channels swapped so each core's "tx"
- * is the other's "rx".
+ * cpu1 (secondary core) devicetree for the OpenBIC dual-core build.
+ *
+ * The in-tree mcx_n9xx_evk_mcxn947_cpu1.dts this layers on top of was
+ * written for the standalone mbox sample: it claims FLEXCOMM2 as
+ * flexcomm2_lpuart2 for cpu1's own console and enables edma0 / all
+ * GPIO ports / LEDs / the button.
+ *
+ * That collides head-on with this port's cpu0:
+ *   - cpu0 runs FLEXCOMM2 as flexcomm2_lpi2c2 - the single consolidated
+ *     sideband bus (IPMB 0x20 + MCTP/SPDM 0x10). A single LP_FLEXCOMM
+ *     instance is one peripheral function at a time. When cpu1 boots
+ *     and its LPUART driver initialises flexcomm2_lpuart2 it
+ *     reconfigures that shared block from I2C to UART mode *while cpu0
+ *     is using it*, which corrupts cpu0 (observed: cpu0 faults out of
+ *     its APPLICATION-level init and the board hangs with no console).
+ *   - edma0 is shared and used by cpu0's FlexSPI/NVS path.
+ *
+ * cpu1 here is headless (all verification is from cpu0's console, see
+ * ../../README.md) and the remote app is pure mailbox - it needs the
+ * MU, its own SRAM/flash, and nothing else. Cut every shared
+ * peripheral loose so cpu1's boot cannot touch cpu0's hardware.
  */
+
 / {
+	chosen {
+		/delete-property/ zephyr,console;
+		/delete-property/ zephyr,shell-uart;
+	};
+
+	/* mirror of the cpu0 mbox-consumer node, tx/rx swapped */
 	mbox-consumer {
 		compatible = "vnd,mbox-consumer";
 		mboxes = <&mbox 0>, <&mbox 1>;
 		mbox-names = "tx", "rx";
 	};
+};
+
+&flexcomm2_lpuart2 {
+	status = "disabled";
+};
+
+&flexcomm2 {
+	status = "disabled";
+};
+
+&edma0 {
+	status = "disabled";
 };
