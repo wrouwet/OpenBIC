@@ -319,13 +319,33 @@ sysbuild domains (`flash_order: [mcx-n9xx-evk, remote]` in
 Communication is over the MU (Messaging Unit) hardware mailbox via
 mainline Zephyr's generic `mbox` API: `src/plat_mbox.c` (cpu0) sends a
 ping every 2s and logs whatever it receives back; `remote/src/main.c`
-(cpu1) is headless (its own console UART, `flexcomm2_lpuart2`, isn't
-wired up - no need for a second serial adapter) and immediately echoes
-back anything it receives. A `plat mbox ping` shell command sends one
-on demand.
+(cpu1) is headless and immediately echoes back anything it receives. A
+`plat mbox ping` shell command sends one on demand.
 
-Verified on real hardware - cpu0's console showing real, repeating
-round trips to cpu1 and back:
+**cpu1 must not touch cpu0's shared peripherals.** The in-tree
+`mcx_n9xx_evk_mcxn947_cpu1.dts` (written for the standalone
+`samples/drivers/mbox`) claims **FLEXCOMM2** as `flexcomm2_lpuart2` for
+cpu1's own console. This port's cpu0 runs FLEXCOMM2 as
+`flexcomm2_lpi2c2` - the single consolidated sideband bus (IPMB 0x20 +
+MCTP/SPDM 0x10). A LP_FLEXCOMM instance is one peripheral function at a
+time, so when cpu1 booted and its LPUART driver initialised
+`flexcomm2_lpuart2` it reconfigured that shared block from I2C to UART
+mode *while cpu0 was mid-boot using it*, corrupting cpu0's RAM (GDB:
+cpu0 BusFault -> UsageFault executing garbage on its own `z_main_stack`
+during `z_init_static_threads()`) - board hung with no console. The
+mbox sample doesn't hit this because its cpu0 never touches FLEXCOMM2.
+Fix (`remote/boards/mcx_n9xx_evk_mcxn947_cpu1.overlay`, devicetree
+only): cpu1 drops its `zephyr,console`/`zephyr,shell-uart` chosen and
+disables `flexcomm2`, `flexcomm2_lpuart2` and `edma0` (also shared -
+cpu0's FlexSPI/NVS path). cpu1 keeps only the MU, its own SRAM/flash
+and `sema42`.
+
+Verified on real hardware (`mcx-n9xx-evk-dualcore` branch, 2026-08-29):
+cpu0 boots fully, and with cpu1 live the whole sideband stack still
+passes its black-box suites unchanged from the single-core baseline
+(SPDM 13/0 incl. crypto-verified CHALLENGE_AUTH, MCTP 19, PLDM 16,
+IPMI). cpu0's console showing real, repeating round trips to cpu1 and
+back:
 
 ```
 [00:00:09.506,000] <inf> plat_mbox: ping sent to cpu1 (channel 1)
